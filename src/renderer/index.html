@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <!-- 内容安全策略：只允许加载本地脚本和样式，防止注入 -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:" />
+  <title>C919 控制台</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<!--
+  布局仿 SDR#：
+  ┌────────────┬──────────────────────────────────────────────┐
+  │ 左侧控制栏 │ 顶部：大号频率显示 + 直接输入                 │
+  │ （可折叠） ├──────────────────────────────────────────────┤
+  │            │ 中间：当前频率的【音频】频谱（line-in FFT）   │
+  │            │       下面是音频瀑布图                        │
+  ├────────────┴──────────────────────────────────────────────┤
+  │ 底部状态栏：连接 / RSSI / SNR / 解调 / 带宽 / 电量 / 温度 + 信号历史小图 │
+  └───────────────────────────────────────────────────────────┘
+-->
+<div id="app">
+  <aside id="side">
+    <div class="brand">HRD-C919 <span class="sub">BLE 控制台</span></div>
+
+    <!-- ========== 连接 ========== -->
+    <details class="panel" open>
+      <summary>📡 连接</summary>
+      <div class="row">
+        <button id="btnScan">扫描</button>
+        <select id="devSel" title="扫描到的设备"><option value="">（自动按名字查找）</option></select>
+      </div>
+      <div class="row">
+        <button id="btnConnect" class="primary">连接</button>
+        <button id="btnDisconnect">断开</button>
+      </div>
+      <label class="row chk"><input type="checkbox" id="chkAuto" checked /> 断线自动重连</label>
+      <div class="hint" id="connHint">后端：-</div>
+    </details>
+
+    <!-- ========== 电源 / 工作模式 ========== -->
+    <details class="panel" open>
+      <summary>⏻ 电源 / 模式</summary>
+      <div class="row">
+        <button data-key="POWER" class="primary" title="电源短按：开机【已验证】">开机</button>
+        <button data-key="POWER_LONG" title="电源长按：关机（说明书：长按 2 秒关机）【推断】">关机</button>
+      </div>
+      <div class="row">
+        <button data-key="BT" title="说明书：短按在 蓝牙 / TF 卡 / PC 模式之间切换">模式 BT/TF/PC</button>
+        <button data-key="BT_LONG" title="说明书：蓝牙模式下长按断开蓝牙音频">断开蓝牙音频</button>
+      </div>
+      <div class="hint">工作模式：<b id="workMode">-</b></div>
+    </details>
+
+    <!-- ========== 波段 ========== -->
+    <details class="panel" open>
+      <summary>📻 波段</summary>
+      <div class="row">
+        <select id="bandSel" title="直接切波段：AB 06 10 band 00000000【推断：频率 0 = 该波段上次频率】"></select>
+        <button id="btnSetBand">切换</button>
+      </div>
+      <div class="row">
+        <button data-key="BAND" title="BAND 短按：FM / SW / MW / LW 轮换（说明书 6.1）">BAND</button>
+        <button data-btn="3" title="App 按钮 3（C919 显示 V-UHF）：AIR / CB / WB / VHF / UHF 轮换">V-UHF</button>
+        <button data-key="MUSIC" title="App 的 bt_subband 按钮【推断：SW/AIR/VHF/UHF 选米波段；FM/MW 选起始频率】">米波段</button>
+      </div>
+      <div class="row">
+        <button data-key="DOWN_LONG" title="长按下：向下自动搜台，找到即停（说明书 8.3.4.2）">◀◀ 搜台</button>
+        <button data-key="DOWN" title="下调一个步进">◀</button>
+        <button data-key="UP" title="上调一个步进">▶</button>
+        <button data-key="UP_LONG" title="长按上：向上自动搜台">搜台 ▶▶</button>
+      </div>
+    </details>
+
+    <!-- ========== 接收设置 ========== -->
+    <details class="panel" open>
+      <summary>🎛 接收</summary>
+      <div class="grid2">
+        <button data-btn="1" data-long="0" title="App 按钮 1 短按（C919: BW-DM）→ 带宽（说明书 8.3.11）">带宽 BW</button>
+        <button data-btn="1" data-long="1" title="App 按钮 1 长按（C919: BW-DM）→ 解调方式（说明书 8.3.12/8.3.13）">解调 DM</button>
+        <button data-key="BANDWIDTH" title="点 App 状态格 2（带宽）">状态格·带宽</button>
+        <button data-key="DEMOD" title="点 App 状态格 1（解调）">状态格·解调</button>
+        <button data-btn="2" data-long="0" title="App 按钮 2 短按（C919: ANT-ATT）→ 天线模式 / 衰减（说明书 6.1）">天线/衰减</button>
+        <button data-btn="2" data-long="1" title="App 按钮 2 长按">天线/衰减(长)</button>
+        <button data-key="CIRCLE" title="App 的 bt_step 按钮【推断：步进】">步进 STEP</button>
+        <button data-key="STEREO" title="立体声键（App 未绑定）【推断】">立体声</button>
+      </div>
+      <div class="kv"><span>步进</span><b id="infoStep">-</b><span>去加重</span><b id="infoDeemp">-</b></div>
+      <div class="kv"><span>衰减</span><b id="infoAtt">-</b><span>天线</span><b id="infoAnt">-</b></div>
+      <div class="kv"><span>立体声</span><b id="infoStereo">-</b><span>EQ</span><b id="infoEq">-</b></div>
+      <div class="sub-title">静噪 SQL（0 = 关）</div>
+      <div class="row">
+        <input type="range" id="sqRange" min="0" max="9" value="0" />
+        <b id="sqVal" class="mono">0</b>
+        <button id="btnSq" title="AB 02 11 等级【推断，来自 App】">设置</button>
+      </div>
+      <div class="row">
+        <button data-key="CELL5" title="点 App 状态格 5（SQL），收音机会弹出静噪选择">SQL 格</button>
+        <span class="hint" id="sqText">-</span>
+      </div>
+      <div class="grid2">
+        <button data-btn="4" data-long="0" title="App 按钮 4 短按（C919: MUTE）">静音</button>
+        <button data-btn="4" data-long="1" title="App 按钮 4 长按（说明书 App §12.2 #25：长按静音/取消）">静音(长)</button>
+        <button data-btn="5" data-long="0" title="App 按钮 5 短按（C919: LOCK）">锁定</button>
+        <button data-btn="5" data-long="1" title="App 按钮 5 长按（说明书 App §12.2 #26：长按锁定/解锁）">锁定(长)</button>
+      </div>
+    </details>
+
+    <!-- ========== 音量 ========== -->
+    <details class="panel" open>
+      <summary>🔊 音量</summary>
+      <div class="row">
+        <button data-key="VOL_DOWN" title="音量 −">−</button>
+        <div class="volbar"><div id="volFill"></div></div>
+        <button data-key="VOL_UP" title="音量 +">＋</button>
+        <b id="volVal" class="mono">-</b>
+      </div>
+    </details>
+
+    <!-- ========== 频道 / 键盘 ========== -->
+    <details class="panel">
+      <summary>💾 频道 / 数字键盘</summary>
+      <div class="grid2">
+        <button data-key="PRESET" title="说明书：短按在 频道模式 / 频率模式 之间切换">频道/频率</button>
+        <button data-key="MEMO_LONG" title="说明书 8.3.6：长按存台，CH*** 闪烁后选号再按确认【推断键码】">存台(长)</button>
+        <button data-key="MEMO" title="MEMO 短按（存台时确认）">MEMO</button>
+        <button data-key="PLAY_LONG" title="App 按钮 3 长按【推断：SCAN 长按 = 自动搜索并存台 ATS】">ATS 自动存台</button>
+      </div>
+      <div class="keypad">
+        <button data-key="1">1</button><button data-key="2">2</button><button data-key="3">3</button>
+        <button data-key="4">4</button><button data-key="5">5</button><button data-key="6">6</button>
+        <button data-key="7">7</button><button data-key="8">8</button><button data-key="9">9</button>
+        <button data-key="POINT">.</button><button data-key="0">0</button><button data-key="BACK">⌫</button>
+      </div>
+      <div class="row"><button data-key="FREQ" class="wide" title="EN：开始输入频率 / 确认（说明书 6.4）">EN（输入 / 确认）</button></div>
+      <div class="hint">频道号：<b id="presetNo">-</b></div>
+    </details>
+
+    <!-- ========== 录音 / 时钟 ========== -->
+    <details class="panel">
+      <summary>⏰ 录音 / 定时 / 时钟</summary>
+      <div class="row">
+        <button data-key="REC" title="App §12.2 #30：短按开始/停止录音（需插 TF 卡）">录音</button>
+        <button data-key="REC_LONG" title="REC 长按（说明书：长按开始/停止录音）">录音(长)</button>
+      </div>
+      <div class="row">
+        <span>睡眠</span>
+        <select id="sleepSel"></select>
+        <button id="btnSleep" title="AB 02 0F 分钟【推断，来自 App】">设置</button>
+        <span class="hint" id="sleepLeft"></span>
+      </div>
+      <div class="row">
+        <button id="btnTime" title="把电脑时间同步到收音机：AB 07 0D【推断，来自 App】">同步时间</button>
+      </div>
+      <div class="row">
+        <span>闹钟1</span>
+        <input type="time" id="alarmTime" value="07:00" />
+        <select id="alarmKind" title="类型【推断：0=收音 1=铃声】"><option value="0">收音</option><option value="1">铃声</option></select>
+      </div>
+      <div class="row">
+        <button id="btnAlarmOn">开启</button><button id="btnAlarmOff">关闭</button>
+        <span class="hint" id="alarmInfo"></span>
+      </div>
+    </details>
+
+    <!-- ========== 全部按键 ========== -->
+    <details class="panel">
+      <summary>⌨ 全部按键（KEYS 表）</summary>
+      <div class="hint">鼠标悬停看说明。长按是独立键码，不是按下/松开。</div>
+      <div id="allKeys" class="keygrid"></div>
+    </details>
+
+    <!-- ========== 实验区 ========== -->
+    <details class="panel">
+      <summary>🧪 原始帧 / 日志</summary>
+      <div class="row">
+        <input id="rawHex" class="mono" placeholder="CMD payload，如 0c 14" />
+        <button id="btnRaw">发送</button>
+      </div>
+      <label class="row chk"><input type="checkbox" id="chkFix" checked /> 自动补 AB/LEN/SUM</label>
+      <div class="hint" id="logPath"></div>
+      <pre id="logView" class="mono"></pre>
+    </details>
+  </aside>
+
+  <main id="main">
+    <!-- ========== 顶部频率显示 ========== -->
+    <header id="top">
+      <div id="freqBox">
+        <div id="bandTag">--</div>
+        <div id="freqDigits" class="mono" title="鼠标滚轮放在某一位上滚动 = 调这一位"></div>
+        <div id="freqUnit">MHz</div>
+        <div id="calibTag" class="tag">-</div>
+      </div>
+      <div id="entry">
+        <input id="freqInput" class="mono" placeholder="如 99.5" />
+        <span id="entryUnit">MHz</span>
+        <button id="btnTune" class="primary">调谐</button>
+        <div class="hint" id="entryHint">FM：K = round(MHz×100)</div>
+      </div>
+      <div id="topRight">
+        <div class="bigsig"><span>RSSI</span><b id="topRssi">--</b></div>
+        <div class="bigsig"><span>SNR</span><b id="topSnr">--</b></div>
+      </div>
+    </header>
+
+    <!-- ========== 中间：音频频谱 + 瀑布 ========== -->
+    <section id="center">
+      <div id="specWrap">
+        <canvas id="spectrum"></canvas>
+        <div id="specOverlay" class="mono"></div>
+      </div>
+      <div id="splitter"></div>
+      <div id="wfWrap"><canvas id="waterfall"></canvas></div>
+    </section>
+  </main>
+
+  <!-- ========== 右侧：音频设置（SDR# 右边也是显示设置） ========== -->
+  <aside id="right">
+    <details class="panel" open>
+      <summary>🎧 音频输入（line-in / 蓝牙）</summary>
+      <select id="audioSel" title="所有输入设备：声卡 line-in、蓝牙 A2DP 源、PipeWire 监视源"></select>
+      <div class="row">
+        <button id="btnAudioRefresh" title="重新枚举输入设备（插拔 / 蓝牙连上后点一下）">刷新</button>
+        <button id="btnAudio" class="primary">开始</button>
+      </div>
+      <label class="row chk"><input type="checkbox" id="chkMonitor" /> 同时从电脑扬声器播放</label>
+      <div class="hint" id="audioHint">未开始</div>
+      <div class="kv"><span>采样率</span><b id="audioSr">-</b><span>电平</span><b id="audioLvl">-</b></div>
+    </details>
+    <details class="panel" open>
+      <summary>📊 频谱 / 瀑布显示</summary>
+      <div class="field"><span>FFT 点数</span>
+        <select id="fftSel"><option>1024</option><option>2048</option><option selected>4096</option><option>8192</option><option>16384</option></select>
+      </div>
+      <div class="field"><span>最大频率</span>
+        <select id="fmaxSel"><option value="4000">4 kHz</option><option value="8000">8 kHz</option><option value="12000" selected>12 kHz</option><option value="16000">16 kHz</option><option value="0">全部</option></select>
+      </div>
+      <div class="field"><span>dB 上限</span><input type="range" id="dbMax" min="-60" max="0" value="-10" /><b id="dbMaxV" class="mono">-10</b></div>
+      <div class="field"><span>dB 下限</span><input type="range" id="dbMin" min="-160" max="-40" value="-110" /><b id="dbMinV" class="mono">-110</b></div>
+      <div class="field"><span>对比度</span><input type="range" id="contrast" min="0.3" max="3" step="0.1" value="1" /><b id="contrastV" class="mono">1.0</b></div>
+      <div class="field"><span>平滑</span><input type="range" id="smooth" min="0" max="0.95" step="0.05" value="0.5" /><b id="smoothV" class="mono">0.50</b></div>
+      <div class="field"><span>色图</span>
+        <select id="cmapSel"><option value="sdrsharp">SDR#</option><option value="turbo">Turbo</option><option value="viridis">Viridis</option><option value="gray">灰度</option></select>
+      </div>
+      <div class="field"><span>瀑布速度</span>
+        <select id="wfSpeed"><option value="1">每帧 1 行</option><option value="2">每 2 帧</option><option value="4">每 4 帧</option></select>
+      </div>
+      <label class="row chk"><input type="checkbox" id="chkPeak" checked /> 峰值保持</label>
+      <label class="row chk"><input type="checkbox" id="chkLog" /> 对数频率轴</label>
+    </details>
+  </aside>
+
+  <!-- ========== 底部状态栏 ========== -->
+  <footer id="status">
+    <div class="st"><span>连接</span><b id="stConn" class="bad">未连接</b></div>
+    <div class="st"><span>RSSI</span><b id="stRssi">-</b></div>
+    <div class="st"><span>SNR</span><b id="stSnr">-</b></div>
+    <div class="st"><span>解调</span><b id="stDemod">-</b></div>
+    <div class="st"><span>带宽</span><b id="stBw">-</b></div>
+    <div class="st"><span>电量</span><b id="stBatt">-</b></div>
+    <div class="st"><span>温度</span><b id="stTemp">-</b></div>
+    <div class="st"><span>固件</span><b id="stVer">-</b></div>
+    <canvas id="history" width="360" height="34" title="最近 3 分钟 RSSI（绿）/ SNR（黄）"></canvas>
+  </footer>
+</div>
+<div id="toast"></div>
+<script src="colormaps.js"></script>
+<script src="audio.js"></script>
+<script src="renderer.js"></script>
+</body>
+</html>

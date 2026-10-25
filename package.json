@@ -1,0 +1,29 @@
+{
+  "name": "c919-electron",
+  "version": "0.1.0",
+  "description": "汉荣达 HRD-C919 收音机 BLE 控制台（仿 SDR# 界面，Electron）",
+  "main": "src/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "mock": "C919_MOCK=1 electron .",
+    "mock:fakeaudio": "C919_MOCK=1 C919_FAKE_AUDIO=1 electron .",
+    "test": "node --test test/",
+    "rebuild": "electron-rebuild -f -w @abandonware/bluetooth-hci-socket",
+    "start:noble": "C919_BLE_BACKEND=noble electron .",
+    "postinstall": "node scripts/postinstall.js",
+    "screenshot": "node scripts/screenshot.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "iconv-lite": "^0.6.3",
+    "node-ble": "^1.13.0"
+  },
+  "optionalDependencies": {
+    "@abandonware/noble": "^1.9.2-26"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^3.7.1",
+    "electron": "^33.2.1"
+  }
+}
