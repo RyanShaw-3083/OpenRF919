@@ -1,6 +1,6 @@
 {
   "name": "c919-electron",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "汉荣达 HRD-C919 收音机 BLE 控制台（仿 SDR# 界面，Electron）",
   "main": "src/main.js",
   "private": true,

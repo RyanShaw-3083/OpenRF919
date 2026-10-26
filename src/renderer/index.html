@@ -17,6 +17,8 @@
   │            │       下面是音频瀑布图                        │
   ├────────────┴──────────────────────────────────────────────┤
   │ 底部状态栏：连接 / RSSI / SNR / 解调 / 带宽 / 电量 / 温度 + 信号历史小图 │
+  ├───────────────────────────────────────────────────────────┤
+  │ 最底部：横向 VU + 峰值表（原始输入电平）+ 削波灯 + 处理后输出电平 │
   └───────────────────────────────────────────────────────────┘
 -->
 <div id="app">
@@ -42,7 +44,7 @@
     <details class="panel" open>
       <summary>⏻ 电源 / 模式</summary>
       <div class="row">
-        <button data-key="POWER" class="primary" title="电源短按：开机【已验证】">开机</button>
+        <button data-key="POWER" class="primary" title="电源短按：开机">开机</button>
         <button data-key="POWER_LONG" title="电源长按：关机（说明书：长按 2 秒关机）【推断】">关机</button>
       </div>
       <div class="row">
@@ -182,6 +184,7 @@
       <pre id="logView" class="mono"></pre>
     </details>
   </aside>
+  <div id="splitL" class="vsplit" title="拖动调整左栏宽度（双击恢复默认）"></div>
 
   <main id="main">
     <!-- ========== 顶部频率显示 ========== -->
@@ -214,9 +217,11 @@
       <div id="wfWrap"><canvas id="waterfall"></canvas></div>
     </section>
   </main>
+  <div id="splitM" class="vsplit" title="拖动调整右栏宽度（双击恢复默认）"></div>
 
-  <!-- ========== 右侧：音频设置（SDR# 右边也是显示设置） ========== -->
+  <!-- ========== 右侧：上半 = 音频输入 / 显示设置；下半 = 弱信号处理（中间横条可拖动） ========== -->
   <aside id="right">
+   <div id="rightTop" class="rpane">
     <details class="panel" open>
       <summary>🎧 音频输入（line-in / 蓝牙）</summary>
       <select id="audioSel" title="所有输入设备：声卡 line-in、蓝牙 A2DP 源、PipeWire 监视源"></select>
@@ -224,9 +229,24 @@
         <button id="btnAudioRefresh" title="重新枚举输入设备（插拔 / 蓝牙连上后点一下）">刷新</button>
         <button id="btnAudio" class="primary">开始</button>
       </div>
-      <label class="row chk"><input type="checkbox" id="chkMonitor" /> 同时从电脑扬声器播放</label>
+      <label class="row chk" title="把（处理后的）声音送到系统默认输出设备。用外放时注意别让收音机/麦克风听到扬声器，否则会啸叫"><input type="checkbox" id="chkMonitor" /> 监听：从电脑扬声器 / 耳机播放</label>
+      <div class="field"><span>监听音量</span><input type="range" id="monVol" min="0" max="100" value="80" /><b id="monVolV" class="mono">80</b></div>
       <div class="hint" id="audioHint">未开始</div>
       <div class="kv"><span>采样率</span><b id="audioSr">-</b><span>电平</span><b id="audioLvl">-</b></div>
+    </details>
+    <details class="panel" id="iqPanel">
+      <summary>🌀 伪 IQ 模式</summary>
+      <div class="hint iq-warn">伪 IQ（由音频希尔伯特变换推导，非射频）。C919 只输出解调后的音频，这里看到的不是电台周围的射频频谱。</div>
+      <label class="row chk"><input type="checkbox" id="iqOn" /> 启用伪 IQ（频谱 / 瀑布改为 −fs/2 … +fs/2）</label>
+      <div class="field"><span>频移</span>
+        <select id="iqShift" title="解析信号只有正频率；频移 −fs/4 后整个音频带居中显示">
+          <option value="0">不移（0 Hz 在中间，负半边基本为空）</option>
+          <option value="q">居中（−fs/4）</option>
+          <option value="custom">自定义</option>
+        </select>
+      </div>
+      <div class="field" id="iqCustomRow"><span>频移 Hz</span><input id="iqHz" class="mono" type="number" step="100" value="6000" /><b class="mono">Hz</b></div>
+      <canvas id="iqScope" width="240" height="160" title="李萨如图：I 横轴，Q 纵轴。单音 = 圆，噪声 = 一团雾"></canvas>
     </details>
     <details class="panel" open>
       <summary>📊 频谱 / 瀑布显示</summary>
@@ -249,11 +269,47 @@
       <label class="row chk"><input type="checkbox" id="chkPeak" checked /> 峰值保持</label>
       <label class="row chk"><input type="checkbox" id="chkLog" /> 对数频率轴</label>
     </details>
+   </div>
+   <div id="splitR" class="hsplit" title="拖动调整上下比例"></div>
+   <div id="rightBottom" class="rpane">
+    <details class="panel" open id="dspPanel">
+      <summary>🎚 弱信号处理（降噪 + 增益）</summary>
+      <label class="row chk" title="总开关。关闭时监听的是原声"><input type="checkbox" id="dspOn" /> <b>启用处理</b><span class="hint" id="dspLat"></span></label>
+      <div class="dsp-body">
+        <label class="row chk" title="两级 12dB/oct 高通（共 24dB/oct），去掉交流嗡嗡声、风声、低频隆隆声"><input type="checkbox" id="dspHp" /> 高通 100 Hz</label>
+        <div class="field"><span>工频陷波</span>
+          <select id="dspHum" title="基波 + 2、3 次谐波三个陷波器"><option value="off">关</option><option value="50">50 Hz（国内）</option><option value="60">60 Hz</option></select>
+        </div>
+        <label class="row chk" title="STFT 频谱减法（1024 点，75% 重叠），在 AudioWorklet 里运行"><input type="checkbox" id="dspDn" /> 降噪</label>
+        <div class="field"><span>降噪强度</span><input type="range" id="dspStr" min="0" max="100" value="50" /><b id="dspStrV" class="mono">50</b></div>
+        <div class="field"><span>噪声估计</span>
+          <select id="dspMode" title="自动：最小值统计，持续跟踪噪声底（需要节目里有停顿）。学习：用「学习噪声」录下的噪声谱"><option value="auto">自动跟踪</option><option value="learned">学习的噪声谱</option></select>
+        </div>
+        <div class="row">
+          <button id="btnLearn" title="调到没有节目的空频点或节目停顿时点一下，录 1 秒当噪声样本（会自动切到「学习的噪声谱」）">学习噪声（1 秒）</button>
+          <span class="hint" id="learnHint">未学习</span>
+        </div>
+        <div class="field" title="带宽限制：低切 / 高切各 24dB/oct。放在降噪之前，降噪 / 增益 / 限幅只作用于带内，带外被衰减。频谱上会画出阴影"><span>带宽限制</span>
+          <select id="dspBand"><option value="full">全带宽（不限制）</option><option value="voice">语音 300–3400 Hz</option><option value="am">AM 窄带 200–2500 Hz</option><option value="custom">自定义</option></select>
+        </div>
+        <div class="field"><span>低切 Hz</span><input type="range" id="dspLoR" min="20" max="2000" step="10" value="300" /><input id="dspLo" class="mono num" type="number" min="20" max="20000" step="10" value="300" /></div>
+        <div class="field"><span>高切 Hz</span><input type="range" id="dspHiR" min="1000" max="20000" step="50" value="3400" /><input id="dspHi" class="mono num" type="number" min="100" max="22000" step="50" value="3400" /></div>
+        <div class="field"><span>增益</span><input type="range" id="dspGain" min="0" max="30" step="0.5" value="6" /><b id="dspGainV" class="mono">+6</b></div>
+        <label class="row chk" title="-3 dBFS 起压的限幅器 + tanh 软削波，增益开大也不会爆音"><input type="checkbox" id="dspLim" /> 限幅（防削波）</label>
+        <div class="field" title="干 / 湿混合：0% = 原声，100% = 只听处理后的声音"><span>混合 干/湿</span><input type="range" id="dspMix" min="0" max="100" value="100" /><b id="dspMixV" class="mono">100%</b></div>
+        <div class="field"><span>频谱显示</span>
+          <select id="dspSpec"><option value="pre">处理前（原始输入）</option><option value="post">处理后</option></select>
+        </div>
+        <div class="row"><button id="btnDspReset" title="恢复默认参数（不改总开关，不删学到的噪声谱）">恢复默认</button></div>
+        <div class="hint" id="dspHint"></div>
+      </div>
+    </details>
+   </div>
   </aside>
 
   <!-- ========== 底部状态栏 ========== -->
   <footer id="status">
-    <div class="st"><span>连接</span><b id="stConn" class="bad">未连接</b></div>
+    <div class="st" id="stConnBox" title="未连接"><span>连接</span><i id="stConn" class="dot bad" role="img" aria-label="未连接"></i></div>
     <div class="st"><span>RSSI</span><b id="stRssi">-</b></div>
     <div class="st"><span>SNR</span><b id="stSnr">-</b></div>
     <div class="st"><span>解调</span><b id="stDemod">-</b></div>
@@ -263,10 +319,22 @@
     <div class="st"><span>固件</span><b id="stVer">-</b></div>
     <canvas id="history" width="360" height="34" title="最近 3 分钟 RSSI（绿）/ SNR（黄）"></canvas>
   </footer>
+
+  <!-- ========== 最底部：横向 VU / 峰值表 ========== -->
+  <div id="vubar" title="声卡【原始】输入电平（处理前），用来调声卡输入增益：RMS 条 + 浅色快速峰值 + 白线峰值保持 1.5 秒">
+    <span class="vu-label">输入</span>
+    <canvas id="vuCanvas"></canvas>
+    <b id="vuRead" class="mono">RMS --  峰 --</b>
+    <span class="vu-unit">dBFS</span>
+    <button id="vuClip" class="clip" title="削波指示">CLIP</button>
+    <span class="vu-out" title="处理链输出（送去监听的信号）电平">输出 <b id="vuOut" class="mono">--</b></span>
+  </div>
 </div>
 <div id="toast"></div>
 <script src="colormaps.js"></script>
+<script src="dsp/denoise_core.js"></script>
 <script src="audio.js"></script>
+<script src="meter.js"></script>
 <script src="renderer.js"></script>
 </body>
 </html>

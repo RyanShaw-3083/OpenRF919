@@ -81,6 +81,7 @@ async function init() {
   api.onConn(({ state, detail }) => onConn(state, detail));
   api.onLog((line) => appendLog(line));
 
+  initLayout();
   initAudio();
   drawHistory();
 }
@@ -114,16 +115,27 @@ function bindConnection() {
 
 const CONN_CN = { idle: '未连接', scanning: '扫描中…', connecting: '连接中…', connected: '已连接',
   reconnecting: '重连中…', disconnected: '已断开', error: '出错' };
+/** 连接状态 → 圆点颜色：ok 绿 / warn 琥珀闪烁 / bad 红 */
+function connClass(on, state) {
+  return on ? 'ok' : (state === 'connecting' || state === 'reconnecting' || state === 'scanning') ? 'warn' : 'bad';
+}
 function onConn(state, detail) {
   setConnected(state === 'connected', state);
-  $('connHint').textContent = `后端：${INFO.backend}　${CONN_CN[state] || state} ${detail || ''}`;
+  // 左侧提示：后端名 + 状态圆点（文字放 tooltip），再加后端给的细节
+  const h = $('connHint'); const txt = CONN_CN[state] || state;
+  h.textContent = `后端：${INFO.backend}　`;
+  const dot = document.createElement('i');
+  dot.className = `dot sm ${connClass(state === 'connected', state)}`; dot.title = txt; dot.setAttribute('role', 'img'); dot.setAttribute('aria-label', txt);
+  h.appendChild(dot);
+  h.appendChild(document.createTextNode(` ${detail || ''}`));
+  h.title = `${txt} ${detail || ''}`.trim();
   if (state === 'error') toast(detail || '连接出错');
 }
 function setConnected(on, state) {
   connected = on;
-  const el = $('stConn');
-  el.textContent = CONN_CN[state] || state;
-  el.className = on ? 'ok' : (state === 'connecting' || state === 'reconnecting' || state === 'scanning') ? 'warn' : 'bad';
+  const el = $('stConn'); const txt = CONN_CN[state] || state;
+  el.className = `dot ${connClass(on, state)}`;
+  el.setAttribute('aria-label', txt); el.title = txt; $('stConnBox').title = `连接：${txt}`;
   // 没连接时，所有发指令的按钮都禁用（音频部分不受影响）
   document.querySelectorAll('#side [data-key], #side [data-btn], #btnSetBand, #btnSq, #btnSleep, #btnTime, #btnAlarmOn, #btnAlarmOff, #btnRaw, #btnTune')
     .forEach((b) => { b.disabled = !on; });
@@ -171,10 +183,11 @@ function renderFreq() {
   $('freqUnit').textContent = ST.unit || fmt.unit;
   $('entryUnit').textContent = fmt.unit;
   const tag = $('calibTag');
-  if (ST.band === 0) { tag.textContent = '已验证'; tag.className = 'tag ok'; tag.title = 'FM：K 单位 10kHz，真机验证'; } else if (fmt.source === 'radio') {
+  tag.style.display = '';
+  if (ST.band === 0) { tag.textContent = ''; tag.className = 'tag'; tag.title = ''; tag.style.display = 'none'; } else if (fmt.source === 'radio') {
     tag.textContent = '真机帧标定'; tag.className = 'tag ok'; tag.title = '格式取自该波段收到的频率帧（显示规则从 App 代码推出）';
   } else { tag.textContent = '推断'; tag.className = 'tag warn'; tag.title = '还没收到过这个波段的频率帧，小数位数是按说明书步进猜的'; }
-  $('entryHint').textContent = ST.band === 0 ? 'FM：K = round(MHz×100)【已验证】'
+  $('entryHint').textContent = ST.band === 0 ? 'FM：K = round(MHz×100)'
     : `${ST.bandName}：K = round(值×10^${dec})【推断】`;
 }
 
@@ -254,6 +267,60 @@ function bindMisc() {
     const up = () => { removeEventListener('mousemove', mv); removeEventListener('mouseup', up); };
     addEventListener('mousemove', mv); addEventListener('mouseup', up);
   });
+}
+
+// ---------------------------------------------------------------------------
+// 4b. 可拖动分隔条：左栏宽 / 右栏宽 / 右栏上下比例，存在 localStorage 'layout'
+//     画布都挂了 ResizeObserver，尺寸一变会自动重排。双击分隔条恢复默认。
+// ---------------------------------------------------------------------------
+const LAYOUT_DEF = { lw: 270, rw: 280, rth: 0.5 };
+const LAYOUT_MIN = { side: 180, right: 220, center: 360, pane: 120 };
+let layout = { ...LAYOUT_DEF };
+function applyLayout() {
+  const W = window.innerWidth;
+  // 先保证中间区至少 center 宽：左右栏按比例让出
+  let { lw, rw } = layout;
+  lw = Math.max(LAYOUT_MIN.side, Math.min(520, lw)); rw = Math.max(LAYOUT_MIN.right, Math.min(600, rw));
+  const over = lw + rw + 10 + LAYOUT_MIN.center - W;
+  if (over > 0) {
+    const room = Math.max(0, (lw - LAYOUT_MIN.side) + (rw - LAYOUT_MIN.right));
+    const k = room ? Math.min(1, over / room) : 0;
+    lw -= (lw - LAYOUT_MIN.side) * k; rw -= (rw - LAYOUT_MIN.right) * k;
+  }
+  const app = $('app');
+  app.style.setProperty('--lw', `${Math.round(lw)}px`); app.style.setProperty('--rw', `${Math.round(rw)}px`);
+  const rh = $('right').clientHeight || 600;
+  const top = Math.max(LAYOUT_MIN.pane, Math.min(rh - LAYOUT_MIN.pane - 5, layout.rth * rh));
+  app.style.setProperty('--rth', `${Math.round(top)}px`);
+}
+function saveLayout() { localStorage.setItem('layout', JSON.stringify(layout)); }
+function dragHelper(el, axis, onMove) {
+  el.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    const start = { x: e.clientX, y: e.clientY };
+    document.body.classList.add('dragging', axis === 'x' ? 'col' : 'row'); el.classList.add('drag');
+    const mv = (ev) => { onMove(ev.clientX - start.x, ev.clientY - start.y, ev); applyLayout(); };
+    const up = () => {
+      removeEventListener('mousemove', mv); removeEventListener('mouseup', up);
+      document.body.classList.remove('dragging', 'col', 'row'); el.classList.remove('drag'); saveLayout();
+    };
+    onMove.begin && onMove.begin();
+    addEventListener('mousemove', mv); addEventListener('mouseup', up);
+  });
+}
+function initLayout() {
+  try { layout = { ...LAYOUT_DEF, ...(JSON.parse(localStorage.getItem('layout') || '{}') || {}) }; } catch { layout = { ...LAYOUT_DEF }; }
+  let base = null;
+  const lMove = (dx) => { layout.lw = base.lw + dx; }; lMove.begin = () => { base = { lw: $('side').offsetWidth }; };
+  const rMove = (dx) => { layout.rw = base.rw - dx; }; rMove.begin = () => { base = { rw: $('right').offsetWidth }; };
+  const vMove = (_dx, dy) => { const h = $('right').clientHeight; layout.rth = Math.max(0.05, Math.min(0.95, (base.top + dy) / h)); };
+  vMove.begin = () => { base = { top: $('rightTop').offsetHeight }; };
+  dragHelper($('splitL'), 'x', lMove); dragHelper($('splitM'), 'x', rMove); dragHelper($('splitR'), 'y', vMove);
+  $('splitL').ondblclick = () => { layout.lw = LAYOUT_DEF.lw; applyLayout(); saveLayout(); };
+  $('splitM').ondblclick = () => { layout.rw = LAYOUT_DEF.rw; applyLayout(); saveLayout(); };
+  $('splitR').ondblclick = () => { layout.rth = LAYOUT_DEF.rth; applyLayout(); saveLayout(); };
+  addEventListener('resize', applyLayout);
+  applyLayout();
 }
 
 // ---------------------------------------------------------------------------
@@ -346,29 +413,171 @@ function appendLog(line) {
 const engine = new window.AudioEngine();
 let view = null;
 
+/**
+ * PipeWire 的设备名往往很长（"Monitor of Built-in Audio Analog Stereo"、
+ * "USB PnP Sound Device Analog Mono" …），下拉框里截短显示，完整名字放 title。
+ */
+function shortLabel(s, max = 34) {
+  s = String(s).replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)\s*$/i, ''); // 去掉 "(0d8c:0014)" 这种 USB ID
+  return s.length <= max ? s : `${s.slice(0, max - 12)}…${s.slice(-11)}`;
+}
+function syncAudioTitle() {
+  const sel = $('audioSel'); const o = sel.options[sel.selectedIndex];
+  sel.title = o ? (o.dataset.full || o.text) : '';
+}
+
 async function refreshDevices() {
   const sel = $('audioSel');
   const list = await engine.listDevices();
   const saved = JSON.parse(localStorage.getItem('audioDev') || 'null');
   sel.innerHTML = '';
-  for (const d of list) sel.add(new Option(d.label, d.id));
+  for (const d of list) { const o = new Option(shortLabel(d.label), d.id); o.title = d.label; o.dataset.full = d.label; sel.add(o); }
   // 记住上次的选择：deviceId 可能变（重启 / 重新配对后），所以 id 对不上时再按名字找
   if (saved) {
     const hit = list.find((d) => d.id === saved.id) || list.find((d) => d.label === saved.label);
     if (hit) sel.value = hit.id;
   }
+  syncAudioTitle();
   return list;
+}
+
+let meter = null;
+
+// ---------------------------------------------------------------------------
+// 7. 弱信号处理（降噪 + 增益 + 干/湿混合），参数存在 localStorage 'dsp'
+// ---------------------------------------------------------------------------
+const BAND_PRESETS = { voice: [300, 3400], am: [200, 2500] }; // 'full' / 'custom' 不在表里
+function loadDsp() {
+  let d = {};
+  try { d = JSON.parse(localStorage.getItem('dsp') || '{}') || {}; } catch { d = {}; }
+  // 旧版（v0.2 早期）的「人声频段」开关 → 语音预设
+  if (d.voice === true && !d.band) { d.band = 'voice'; d.bandLo = 300; d.bandHi = 3400; }
+  delete d.voice;
+  const out = { ...window.DSP_DEFAULTS, ...d };
+  if (!['full', 'voice', 'am', 'custom'].includes(out.band)) out.band = 'full';
+  return out;
+}
+/** 频谱上的带宽阴影：处理启用且不是全带宽时才画 */
+function updateBandShade() {
+  if (!view) return;
+  const d = engine.dsp;
+  view.band = d.enabled && d.band !== 'full' ? { lo: d.bandLo, hi: d.bandHi, shift: typeof iqOffsetHz === 'function' ? iqOffsetHz() : 0 } : null;
+}
+function saveDsp() { localStorage.setItem('dsp', JSON.stringify(engine.dsp)); }
+function saveMon() { localStorage.setItem('monitor', JSON.stringify({ vol: Number($('monVol').value) })); }
+
+function dspToUi(d) {
+  $('dspOn').checked = d.enabled; $('dspHp').checked = d.hp; $('dspHum').value = d.hum;
+  $('dspDn').checked = d.dn; $('dspStr').value = Math.round(d.dnStrength * 100); $('dspMode').value = d.dnMode;
+  $('dspBand').value = d.band; $('dspLo').value = d.bandLo; $('dspHi').value = d.bandHi;
+  $('dspLoR').value = Math.min(2000, d.bandLo); $('dspHiR').value = Math.max(1000, d.bandHi);
+  for (const id of ['dspLo', 'dspHi', 'dspLoR', 'dspHiR']) $(id).disabled = d.band === 'full';
+  updateBandShade();
+  $('dspGain').value = d.gainDb; $('dspLim').checked = d.limiter;
+  $('dspMix').value = d.mix; $('dspSpec').value = d.specPost ? 'post' : 'pre';
+  $('dspStrV').textContent = Math.round(d.dnStrength * 100);
+  $('dspGainV').textContent = `+${Number(d.gainDb).toFixed(d.gainDb % 1 ? 1 : 0)}`;
+  $('dspMixV').textContent = `${d.mix}%`;
+  $('dspPanel').classList.toggle('on', d.enabled);
+}
+function dspStatus() {
+  const d = engine.dsp;
+  $('dspLat').textContent = d.enabled && engine.running ? `延迟 ≈${(engine.wetLatencyMs || 0).toFixed(0)}ms` : '';
+  if (engine.running && engine.dnError) $('dspHint').textContent = `降噪模块加载失败，已旁路：${engine.dnError}`;
+  else if (d.enabled && !$('chkMonitor').checked) $('dspHint').textContent = '提示：处理只作用于监听声音（和"处理后"频谱），记得勾选监听';
+  else $('dspHint').textContent = '';
+}
+
+function bindDsp() {
+  engine.dsp = loadDsp();
+  const prof = (() => { try { return JSON.parse(localStorage.getItem('noiseProfile') || 'null'); } catch { return null; } })();
+  if (prof && Array.isArray(prof.data)) { engine.noiseProfile = prof.data; $('learnHint').textContent = `已学习（${prof.when}）`; }
+  dspToUi(engine.dsp);
+  const set = (patch) => { engine.setDsp(patch); saveDsp(); dspToUi(engine.dsp); dspStatus(); };
+  $('dspOn').onchange = (e) => set({ enabled: e.target.checked });
+  $('dspHp').onchange = (e) => set({ hp: e.target.checked });
+  $('dspHum').onchange = (e) => set({ hum: e.target.value });
+  $('dspDn').onchange = (e) => set({ dn: e.target.checked });
+  $('dspStr').oninput = (e) => set({ dnStrength: Number(e.target.value) / 100 });
+  $('dspMode').onchange = (e) => {
+    if (e.target.value === 'learned' && !engine.noiseProfile) toast('还没学习过噪声：先点「学习噪声」，学完前仍按自动跟踪处理', true);
+    set({ dnMode: e.target.value });
+  };
+  // 带宽限制：预设改写低切 / 高切；手动改数值自动变成"自定义"
+  $('dspBand').onchange = (e) => {
+    const p = BAND_PRESETS[e.target.value];
+    set(p ? { band: e.target.value, bandLo: p[0], bandHi: p[1] } : { band: e.target.value });
+  };
+  const setCut = (lo, hi) => {
+    lo = Math.round(Number(lo)); hi = Math.round(Number(hi));
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return;
+    lo = Math.max(20, Math.min(20000, lo)); hi = Math.max(100, Math.min(22000, hi));
+    if (hi < lo + 100) hi = lo + 100; // 至少留 100Hz
+    const preset = Object.entries(BAND_PRESETS).find(([, v]) => v[0] === lo && v[1] === hi);
+    set({ band: preset ? preset[0] : 'custom', bandLo: lo, bandHi: hi });
+  };
+  $('dspLoR').oninput = (e) => setCut(e.target.value, engine.dsp.bandHi);
+  $('dspHiR').oninput = (e) => setCut(engine.dsp.bandLo, e.target.value);
+  $('dspLo').onchange = (e) => setCut(e.target.value, engine.dsp.bandHi);
+  $('dspHi').onchange = (e) => setCut(engine.dsp.bandLo, e.target.value);
+  $('dspGain').oninput = (e) => set({ gainDb: Number(e.target.value) });
+  $('dspLim').onchange = (e) => set({ limiter: e.target.checked });
+  $('dspMix').oninput = (e) => set({ mix: Number(e.target.value) });
+  $('dspSpec').onchange = (e) => { set({ specPost: e.target.value === 'post' }); view.peak = null; };
+  $('btnDspReset').onclick = () => { engine.dsp = { ...window.DSP_DEFAULTS, enabled: engine.dsp.enabled }; engine._rewire(); engine._selectSpectrum(); saveDsp(); dspToUi(engine.dsp); dspStatus(); };
+  $('btnLearn').onclick = () => {
+    if (!engine.running) return toast('先在上面点「开始」打开音频输入');
+    if (!engine.learnNoise(1)) return toast('降噪模块没加载成功，不能学习');
+    $('learnHint').textContent = '学习中…（保持只有底噪）';
+  };
+  engine.onLearned = (data) => {
+    const when = new Date().toLocaleTimeString();
+    localStorage.setItem('noiseProfile', JSON.stringify({ data, when, sr: engine.ctx ? engine.ctx.sampleRate : 0 }));
+    $('learnHint').textContent = `已学习（${when}）`;
+    set({ dnMode: 'learned' });
+    toast('噪声样本已记录，已切到「学习的噪声谱」', true);
+  };
+  setInterval(dspStatus, 1000);
+}
+
+// ---------------------------------------------------------------------------
+// 8. 伪 IQ（希尔伯特变换），设置存在 localStorage 'iq'
+// ---------------------------------------------------------------------------
+const IQ_DEFAULTS = { on: false, shift: '0', hz: 6000 };
+let iqCfg = { ...IQ_DEFAULTS };
+function iqOffsetHz() {
+  const sr = engine.ctx ? engine.ctx.sampleRate : 48000;
+  return iqCfg.shift === 'q' ? sr / 4 : iqCfg.shift === 'custom' ? Number(iqCfg.hz) || 0 : 0;
+}
+function applyIq() {
+  $('iqOn').checked = iqCfg.on; $('iqShift').value = iqCfg.shift; $('iqHz').value = iqCfg.hz;
+  $('iqCustomRow').style.display = iqCfg.shift === 'custom' ? '' : 'none';
+  $('iqPanel').classList.toggle('on', iqCfg.on);
+  $('chkLog').disabled = iqCfg.on; // 复数谱有负频率，对数轴没意义
+  if (iqCfg.on) $('iqPanel').open = true;
+  localStorage.setItem('iq', JSON.stringify(iqCfg));
+  engine.setIq({ on: iqCfg.on, offsetHz: iqOffsetHz() });
+  updateBandShade();
+}
+function bindIq() {
+  try { iqCfg = { ...IQ_DEFAULTS, ...(JSON.parse(localStorage.getItem('iq') || '{}') || {}) }; } catch { iqCfg = { ...IQ_DEFAULTS }; }
+  $('iqOn').onchange = (e) => { iqCfg.on = e.target.checked; applyIq(); };
+  $('iqShift').onchange = (e) => { iqCfg.shift = e.target.value; applyIq(); };
+  $('iqHz').onchange = (e) => { iqCfg.hz = Number(e.target.value) || 0; applyIq(); };
+  applyIq();
 }
 
 async function startAudio() {
   const sel = $('audioSel');
-  const label = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '';
+  const opt = sel.options[sel.selectedIndex];
+  const label = opt ? (opt.dataset.full || opt.text) : '';
   try {
     await engine.start(sel.value, label);
     engine.setMonitor($('chkMonitor').checked);
+    engine.setIq({ on: iqCfg.on, offsetHz: iqOffsetHz() });
     localStorage.setItem('audioDev', JSON.stringify({ id: sel.value, label }));
     $('btnAudio').textContent = '停止';
-    $('audioHint').textContent = `正在采集：${label}`;
+    $('audioHint').textContent = `正在采集：${shortLabel(label, 40)}`; $('audioHint').title = label;
     $('audioSr').textContent = `${engine.ctx.sampleRate} Hz`;
     // 打开设备后浏览器才给真实名字，顺手刷新一次列表
     const id = sel.value;
@@ -397,8 +606,18 @@ async function initAudio() {
   $('wfSpeed').onchange = () => view.set('wfEvery', Number($('wfSpeed').value));
   $('chkPeak').onchange = (e) => view.set('peak', e.target.checked);
   $('chkLog').onchange = (e) => view.set('log', e.target.checked);
-  $('chkMonitor').onchange = (e) => engine.setMonitor(e.target.checked);
+  $('chkMonitor').onchange = (e) => { engine.setMonitor(e.target.checked); saveMon(); };
+  const monVol = () => { const v = Number($('monVol').value); $('monVolV').textContent = v; engine.setMonitorVolume(v / 100); };
+  $('monVol').oninput = () => { monVol(); saveMon(); };
+  { // 监听音量记住；监听开关本身【不】记住，每次启动默认关，防止一开就啸叫
+    const m = JSON.parse(localStorage.getItem('monitor') || 'null');
+    if (m && Number.isFinite(m.vol)) $('monVol').value = m.vol;
+    monVol();
+  }
+  bindDsp();
+  bindIq();
   $('btnAudioRefresh').onclick = () => refreshDevices();
+  $('audioSel').addEventListener('change', syncAudioTitle);
   $('btnAudio').onclick = async () => {
     if (engine.running) {
       await engine.stop(); $('btnAudio').textContent = '开始'; $('audioHint').textContent = '已停止';
@@ -411,16 +630,27 @@ async function initAudio() {
   if (INFO.fakeAudio) { $('audioSel').value = window.AUDIO_OSC_ID; await startAudio(); }
 
   // 绘制循环：约 30 帧/秒（requestAnimationFrame 一般是 60，隔帧画）
-  let last = 0;
+  meter = new window.LevelMeter($('vuCanvas'), $('vuClip'), $('vuRead'));
+  let last = 0; let outMs = 0;
   const loop = (t) => {
     requestAnimationFrame(loop);
     if (t - last < 32) return;
+    const dt = Math.min(0.5, (t - last) / 1000);
     last = t;
     const fr = engine.read();
     if (fr) {
       view.draw(fr);
       $('audioLvl').textContent = `${fr.rms.toFixed(0)} dBFS`;
     }
+    const m = engine.running ? engine.readMeters(dt * engine.ctx.sampleRate) : null;
+    meter.update(m ? m.inp : null, dt, t);
+    if (iqCfg.on) window.drawIqScope($('iqScope'), engine.iqScope(512));
+    if (m && m.out) {
+      outMs += (m.out.ms - outMs) * (1 - Math.exp(-dt / 0.3));
+      const db = 10 * Math.log10(outMs + 1e-12);
+      $('vuOut').textContent = db > -99 ? `${db.toFixed(1)} dBFS` : '-∞';
+      $('vuOut').style.color = m.out.peak >= 0.999 ? 'var(--bad)' : '';
+    } else { outMs = 0; $('vuOut').textContent = '--'; }
   };
   requestAnimationFrame(loop);
 }

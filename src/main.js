@@ -138,7 +138,9 @@ process.on('unhandledRejection', (e) => logLine('ERR', `未处理的 Promise 拒
 // ---------------------------------------------------------------------------
 function createWindow() {
   win = new BrowserWindow({
-    width: 1400, height: 880, minWidth: 1000, minHeight: 640,
+    // C919_WIN_SIZE=1000x700：开发 / 截图时指定窗口大小
+    ...(() => { const m = /^(\d+)x(\d+)$/.exec(process.env.C919_WIN_SIZE || ''); return m ? { width: +m[1], height: +m[2] } : { width: 1400, height: 880 }; })(),
+    minWidth: 900, minHeight: 600,
     backgroundColor: '#1e1e1e', title: 'C919 控制台',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -149,6 +151,10 @@ function createWindow() {
   });
   win.setMenuBarVisibility(false);
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  // 网页里的 console 警告 / 错误也写进日志，方便排查（例如 AudioWorklet 加载失败）
+  win.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+    if (level >= 2) logLine('CONSOLE', `${message} (${path.basename(sourceId || '')}:${line})`);
+  });
 
   // 截图模式（只给开发 / 预览用）：C919_SCREENSHOT=/path/to/x.png
   if (process.env.C919_SCREENSHOT) {
@@ -168,6 +174,26 @@ function createWindow() {
           document.getElementById('btnTune').click();
           await sleep(1500);
         })()`);
+      }
+      // 截图时顺便打开弱信号处理和伪 IQ（开发用：C919_SMOKE_DSP=1 / C919_SMOKE_IQ=1）
+      if (process.env.C919_SMOKE_DSP === '1' || process.env.C919_SMOKE_IQ !== undefined) {
+        const r = await win.webContents.executeJavaScript(`(async () => {
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+          const click = (id) => { const el = document.getElementById(id); el.checked = !el.checked; el.dispatchEvent(new Event('change')); };
+          if (${process.env.C919_SMOKE_DSP === '1'}) { if (!document.getElementById('dspOn').checked) click('dspOn');
+            const h = document.getElementById('dspHum'); h.value = '50'; h.dispatchEvent(new Event('change')); }
+          if (${process.env.C919_SMOKE_IQ === '0'} && document.getElementById('iqOn').checked) click('iqOn');
+          if (${process.env.C919_SMOKE_IQ === '1'}) { if (!document.getElementById('iqOn').checked) click('iqOn'); document.getElementById('iqScope').scrollIntoView(); }
+          await sleep(4000);
+          return JSON.stringify({ dn: !!engine.dnNode, dnErr: engine.dnError, iq: !!engine.iqNode, iqErr: engine.iqError || '',
+            meters: engine.readMeters(1600), lat: engine.wetLatencyMs, ch: engine.channels });
+        })()`);
+        logLine('SMOKE', r);
+      }
+      // 开发用：C919_SMOKE_EVAL=/path/x.js —— 在网页里执行一段 async 代码（return 的值写进日志），用来做界面自检
+      if (process.env.C919_SMOKE_EVAL) {
+        const code = fs.readFileSync(process.env.C919_SMOKE_EVAL, 'utf8');
+        try { logLine('EVAL', String(await win.webContents.executeJavaScript(`(async () => { ${code} })()`))); } catch (e) { logLine('EVAL', `出错 ${e.message}`); }
       }
       const img = await win.webContents.capturePage();
       fs.writeFileSync(process.env.C919_SCREENSHOT, img.toPNG());
